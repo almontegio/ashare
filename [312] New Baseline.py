@@ -3,7 +3,7 @@
 
 # In[1]:
 
-
+import os
 import numpy as np
 import pandas as pd
 from sklearn.tree import DecisionTreeClassifier
@@ -20,16 +20,40 @@ RANDOM_STATE = 42
 
 # In[2]:
 
+import os
+import pyarrow as pa
+import pyarrow.parquet as pq
+import pandas as pd
 
-train = pd.read_parquet(r'C:\Users\almon\Documents\Learning\Machine Learning\Kaggle\ASHARE\Cleaned\Parquet\updated_2_train.parquet')
-test = pd.read_parquet(r'C:\Users\almon\Documents\Learning\Machine Learning\Kaggle\ASHARE\Cleaned\Parquet\updated_2_test.parquet')
+# 1) Define paths to your Parquet files (use relative or Linux paths in Codespaces)
+base_dir = os.path.dirname(os.path.abspath(__file__))   # Directory where your script is located
+train_path = os.path.join(base_dir, "Parquets", "updated_2_train.parquet")
+test_path  = os.path.join(base_dir, "Parquets", "updated_2_test.parquet")
+
+# 2) Read the train Parquet file in chunks
+train_file = pq.ParquetFile(train_path)
+
+# Decide how many rows you want in each chunk:
+# Lower batch_size -> uses less memory but takes more iterations.
+batch_size = 50_000
+
+train_dfs = []
+for batch in train_file.iter_batches(batch_size=batch_size):
+    # Convert to Pandas DataFrame
+    df_chunk = batch.to_pandas()
+    # Perform any processing on this chunk if needed
+    # e.g., partial fit a scaler or transform data
+    train_dfs.append(df_chunk)
+
+# 3) Concatenate all train chunks into a single DataFrame
+train = pd.concat(train_dfs, ignore_index=True)
 
 
 # In[3]:
 
 
 print(train.info())
-print(test.info())
+
 
 
 # In[4]:
@@ -43,31 +67,31 @@ drop_cols = [
 
 # Drop from trainml
 trainml = train.drop(columns=drop_cols)
-testml = test.drop(columns=drop_cols)
+print(trainml.info())
 
 
 # In[5]:
 
 
 print(trainml.isna().sum().sort_values(ascending=False).head(20))
-print(testml.isna().sum().sort_values(ascending=False).head(20))
+
 
 
 # In[6]:
 
 
 trainbackup = trainml
-testbackup = testml
+
 
 
 # In[7]:
 
 
-row_id = testml["row_id"]
+
 squarefeet = trainml["square_feet"]
 target = np.log1p(trainml["meter_reading"]/squarefeet)
 trainml = trainml.drop("meter_reading", axis = 1)
-testml = testml.drop("row_id", axis = 1)
+
 
 
 # In[8]:
@@ -77,10 +101,6 @@ import pandas as pd
 import numpy as np
 from sklearn.preprocessing import StandardScaler
 
-# Suppose trainml and testml are your large DataFrames already in memory
-# e.g.:
-# trainml = pd.read_parquet("path/to/updated_train.parquet")
-# testml  = pd.read_parquet("path/to/updated_test.parquet")
 
 # 1) Identify all numeric columns in trainml
 all_numeric_cols = trainml.select_dtypes(include=[np.number]).columns.tolist()
@@ -91,7 +111,7 @@ print("Numeric columns found:", all_numeric_cols)
 scaler = StandardScaler()
 
 # 3) Choose a suitable chunk size (depends on your available RAM)
-chunk_size = 100_000
+chunk_size = 10_000
 
 # ---------------------------------------------
 # PASS 1: PARTIAL-FIT THE SCALER ON TRAIN IN CHUNKS
@@ -133,28 +153,6 @@ train_scaled = pd.concat(transformed_train_chunks, ignore_index=True)
 
 print("Train scaling done. Final shape:", train_scaled.shape)
 
-# ---------------------------------------------
-# TRANSFORM THE TEST SET IN CHUNKS (NO PARTIAL_FIT!)
-# ---------------------------------------------
-test_nrows = testml.shape[0]
-transformed_test_chunks = []
-
-for start in range(0, test_nrows, chunk_size):
-    end = min(start + chunk_size, test_nrows)
-    
-    # Slice out the chunk
-    chunk = testml.iloc[start:end].copy()
-    
-    # Scale using the scaler fitted on TRAIN
-    chunk[all_numeric_cols] = scaler.transform(chunk[all_numeric_cols])
-    
-    # Collect transformed chunk
-    transformed_test_chunks.append(chunk)
-
-# Concatenate all transformed chunks
-test_scaled = pd.concat(transformed_test_chunks, ignore_index=True)
-
-print("Test scaling done. Final shape:", test_scaled.shape)
 
 # ---------------------------------------------
 # Now `train_scaled` and `test_scaled` contain 
@@ -189,30 +187,27 @@ xgb_model = xgb.XGBRegressor(
 # Training the model
 xgb_model.fit(X_train, y_train)
 
-# Making predictions
-y_pred = np.expm1(xgb_model.predict(test_scaled))*testml["square_feet"]
-
-
-# In[ ]:
-
-
-import os
+# 1) Import joblib and datetime
+import joblib
 from datetime import datetime
 
-submission_df = pd.DataFrame({
-    'row_id': row_id,
-    'meter_reading': y_pred
-})
+# 2) Create or use your model directory
+model_dir = os.path.join(base_dir, "Models")  # /workspaces/ashare/Models
+os.makedirs(model_dir, exist_ok=True)
 
-# Step 5: Ensure the directory exists
-output_dir = r'C:\Users\almon\Documents\Learning\Machine Learning\Kaggle\ASHARE\Results'
-if not os.path.exists(output_dir):
-    os.makedirs(output_dir)
+# 3) Generate a date string (e.g., 20250314)
+current_date = datetime.now().strftime('%Y%m%d')
 
-# Step 6: Save the submission DataFrame to CSV with the date included in the filename
-current_date = datetime.now().strftime('%m%d')  # Get the current date in 'MMDD' format
-filename = f'submission_11_2025_baseline_normalized{current_date}.csv'
-submission_df.to_csv(os.path.join(output_dir, filename), index=False)
+# 4) Build a filename (e.g., xgb_model_20250314.joblib)
+model_filename = f"xgb_model_{current_date}.joblib"
+
+# 5) Full path to save the model
+model_path = os.path.join(model_dir, model_filename)
+
+# 6) Save the trained model
+joblib.dump(xgb_model, model_path)
+
+print(f"Model saved to: {model_path}")
 
 
 
