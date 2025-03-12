@@ -2,7 +2,7 @@ import os
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pandas as pd
-
+#trying desktop version
 # 1) Define paths to your Parquet files (use relative or Linux paths in Codespaces)
 base_dir = os.path.dirname(os.path.abspath(__file__))   # Directory where your script is located
 train_path = os.path.join(base_dir, "Parquets", "updated_2_train.parquet")
